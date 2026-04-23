@@ -101,6 +101,20 @@ function isValidId(value) {
   return /^\d+$/.test(String(value || ""));
 }
 
+function normalizeTimeInput(value) {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = String(value).trim();
+
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) {
+    return undefined;
+  }
+
+  return `${trimmed}:00`;
+}
+
 async function getDonationRecordById(recordId) {
   const pool = await getPool();
   const result = await pool
@@ -645,8 +659,8 @@ app.get("/", async (req, res) => {
 app.post("/donations", async (req, res) => {
   const donationDate = req.body.donationDate;
   const donationType = req.body.donationType;
-  const arrivalTime = req.body.arrivalTime || null;
-  const departureTime = req.body.departureTime || null;
+  const arrivalTime = normalizeTimeInput(req.body.arrivalTime);
+  const departureTime = normalizeTimeInput(req.body.departureTime);
   const fatigueRating = req.body.fatigueRating || null;
   const note = req.body.note ? req.body.note.trim() : null;
 
@@ -665,14 +679,19 @@ app.post("/donations", async (req, res) => {
     return;
   }
 
+  if (arrivalTime === undefined || departureTime === undefined) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Čas příchodu a odchodu musí být ve formátu HH:MM." }));
+    return;
+  }
+
   try {
     const pool = await getPool();
     await pool
       .request()
       .input("DonationDate", sql.Date, donationDate)
       .input("DonationType", sql.NVarChar(20), donationType)
-      .input("ArrivalTime", sql.Time(0), arrivalTime)
-      .input("DepartureTime", sql.Time(0), departureTime)
+      .input("ArrivalTime", sql.VarChar(8), arrivalTime)
+      .input("DepartureTime", sql.VarChar(8), departureTime)
       .input("FatigueRating", sql.TinyInt, fatigueRating ? Number(fatigueRating) : null)
       .input("Note", sql.NVarChar(1000), note)
       .query(`
@@ -687,8 +706,8 @@ app.post("/donations", async (req, res) => {
         VALUES (
           @DonationDate,
           @DonationType,
-          @ArrivalTime,
-          @DepartureTime,
+          TRY_CONVERT(TIME(0), @ArrivalTime),
+          TRY_CONVERT(TIME(0), @DepartureTime),
           @FatigueRating,
           @Note
         )
@@ -715,8 +734,8 @@ app.post("/donations/:id/update", async (req, res) => {
 
   const donationDate = req.body.donationDate;
   const donationType = req.body.donationType;
-  const arrivalTime = req.body.arrivalTime || null;
-  const departureTime = req.body.departureTime || null;
+  const arrivalTime = normalizeTimeInput(req.body.arrivalTime);
+  const departureTime = normalizeTimeInput(req.body.departureTime);
   const fatigueRating = req.body.fatigueRating || null;
   const note = req.body.note ? req.body.note.trim() : null;
 
@@ -735,6 +754,11 @@ app.post("/donations/:id/update", async (req, res) => {
     return;
   }
 
+  if (arrivalTime === undefined || departureTime === undefined) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Čas příchodu a odchodu musí být ve formátu HH:MM." }));
+    return;
+  }
+
   try {
     const pool = await getPool();
     const updateResult = await pool
@@ -742,8 +766,8 @@ app.post("/donations/:id/update", async (req, res) => {
       .input("Id", sql.Int, Number(recordId))
       .input("DonationDate", sql.Date, donationDate)
       .input("DonationType", sql.NVarChar(20), donationType)
-      .input("ArrivalTime", sql.Time(0), arrivalTime)
-      .input("DepartureTime", sql.Time(0), departureTime)
+      .input("ArrivalTime", sql.VarChar(8), arrivalTime)
+      .input("DepartureTime", sql.VarChar(8), departureTime)
       .input("FatigueRating", sql.TinyInt, fatigueRating ? Number(fatigueRating) : null)
       .input("Note", sql.NVarChar(1000), note)
       .query(`
@@ -751,8 +775,8 @@ app.post("/donations/:id/update", async (req, res) => {
         SET
           DonationDate = @DonationDate,
           DonationType = @DonationType,
-          ArrivalTime = @ArrivalTime,
-          DepartureTime = @DepartureTime,
+          ArrivalTime = TRY_CONVERT(TIME(0), @ArrivalTime),
+          DepartureTime = TRY_CONVERT(TIME(0), @DepartureTime),
           FatigueRating = @FatigueRating,
           Note = @Note
         WHERE Id = @Id
