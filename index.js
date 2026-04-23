@@ -446,12 +446,6 @@ function renderPage({
         box-shadow: 0 14px 24px rgba(14, 111, 216, 0.26);
       }
 
-      .hint {
-        margin-top: 1.2rem;
-        font-size: 0.88rem;
-        color: var(--muted);
-      }
-
       .small {
         font-size: 0.85rem;
         color: var(--muted);
@@ -609,7 +603,6 @@ function renderPage({
         </section>
       </div>
 
-      <p class="hint">Tip: pro Azure nastav v Application Settings proměnné AZURE_SQL_CONNECTIONSTRING nebo DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE.</p>
     </main>
   </body>
 </html>`;
