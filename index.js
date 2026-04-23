@@ -174,8 +174,25 @@ function formatTimeForInput(value) {
     return "";
   }
 
-  const text = String(value);
-  return text.length >= 5 ? text.slice(0, 5) : text;
+  const pad2 = (num) => String(num).padStart(2, "0");
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${pad2(value.getHours())}:${pad2(value.getMinutes())}`;
+  }
+
+  const text = String(value).trim();
+
+  const hhmmMatch = text.match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+  if (hhmmMatch) {
+    return `${hhmmMatch[1]}:${hhmmMatch[2]}`;
+  }
+
+  const embeddedTimeMatch = text.match(/([01]\d|2[0-3]):([0-5]\d)/);
+  if (embeddedTimeMatch) {
+    return `${embeddedTimeMatch[1]}:${embeddedTimeMatch[2]}`;
+  }
+
+  return "";
 }
 
 function formatDateForDisplay(value) {
