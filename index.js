@@ -2,14 +2,12 @@ const express = require("express");
 const sql = require("mssql");
 
 const app = express();
-
 const port = process.env.PORT || 3000;
 
 app.use(express.urlencoded({ extended: false }));
 
 const allowedDonationTypes = new Set(["krev", "plazma"]);
 const allowedFatigueRatings = new Set(["1", "2", "3", "4", "5"]);
-
 let poolPromise;
 
 function resolveConnectionConfig() {
@@ -73,7 +71,7 @@ async function getPool() {
                 Note NVARCHAR(1000) NULL,
                 CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
               );
-            END
+            END;
 
             IF COL_LENGTH('dbo.DonationRecords', 'ArrivalTime') IS NULL
               ALTER TABLE dbo.DonationRecords ADD ArrivalTime TIME(0) NULL;
@@ -99,13 +97,192 @@ async function getPool() {
   return poolPromise;
 }
 
-function renderPage({ errorMessage = "", successMessage = "" } = {}) {
+function isValidId(value) {
+  return /^\d+$/.test(String(value || ""));
+}
+
+async function getDonationRecordById(recordId) {
+  const pool = await getPool();
+  const result = await pool
+    .request()
+    .input("Id", sql.Int, Number(recordId))
+    .query(`
+      SELECT TOP (1)
+        Id,
+        DonationDate,
+        DonationType,
+        ArrivalTime,
+        DepartureTime,
+        FatigueRating,
+        Note,
+        CreatedAt
+      FROM dbo.DonationRecords
+      WHERE Id = @Id
+    `);
+
+  return result.recordset[0] || null;
+}
+
+async function getDonationRecords() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    SELECT
+      Id,
+      DonationDate,
+      DonationType,
+      ArrivalTime,
+      DepartureTime,
+      FatigueRating,
+      Note,
+      CreatedAt
+    FROM dbo.DonationRecords
+    ORDER BY DonationDate DESC, CreatedAt DESC, Id DESC
+  `);
+
+  return result.recordset;
+}
+
+function formatDateForInput(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function formatTimeForInput(value) {
+  if (!value) {
+    return "";
+  }
+
+  const text = String(value);
+  return text.length >= 5 ? text.slice(0, 5) : text;
+}
+
+function formatDateForDisplay(value) {
+  if (!value) {
+    return "—";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return new Intl.DateTimeFormat("cs-CZ", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatDateTimeForDisplay(value) {
+  if (!value) {
+    return "—";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return new Intl.DateTimeFormat("cs-CZ", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderPage({
+  errorMessage = "",
+  successMessage = "",
+  records = [],
+  formValues = {},
+  isEditMode = false,
+} = {}) {
+  const formTitle = isEditMode ? "Upravit záznam" : "Nový záznam";
+  const submitLabel = isEditMode ? "Uložit změny" : "Uložit záznam";
+  const subtitle =
+    "Zadej datum, typ, časy, únavu a poznámku. Záznamy se ukládají do Azure SQL databáze.";
+
+  const donationDateValue = escapeHtml(formValues.donationDate || "");
+  const donationTypeValue = formValues.donationType || "";
+  const arrivalTimeValue = escapeHtml(formValues.arrivalTime || "");
+  const departureTimeValue = escapeHtml(formValues.departureTime || "");
+  const fatigueRatingValue = String(formValues.fatigueRating || "");
+  const noteValue = escapeHtml(formValues.note || "");
+
+  const typeOptions = [
+    { value: "", label: "Vyber typ odběru" },
+    { value: "krev", label: "krev" },
+    { value: "plazma", label: "plazma" },
+  ]
+    .map(
+      (option) =>
+        `<option value="${option.value}" ${option.value === donationTypeValue ? "selected" : ""}>${option.label}</option>`,
+    )
+    .join("");
+
+  const fatigueOptions = [
+    { value: "", label: "Vyber hodnocení" },
+    { value: "1", label: "1 - velmi unavený" },
+    { value: "2", label: "2" },
+    { value: "3", label: "3" },
+    { value: "4", label: "4" },
+    { value: "5", label: "5 - cítil jsem se nejlépe" },
+  ]
+    .map(
+      (option) =>
+        `<option value="${option.value}" ${option.value === fatigueRatingValue ? "selected" : ""}>${option.label}</option>`,
+    )
+    .join("");
+
+  const recordsMarkup = records.length
+    ? records
+        .map((record) => {
+          const noteText = record.Note ? escapeHtml(record.Note) : "—";
+          return `<tr>
+            <td>${escapeHtml(record.Id)}</td>
+            <td>${escapeHtml(formatDateForDisplay(record.DonationDate))}</td>
+            <td>${escapeHtml(record.DonationType)}</td>
+            <td>${escapeHtml(formatTimeForInput(record.ArrivalTime) || "—")}</td>
+            <td>${escapeHtml(formatTimeForInput(record.DepartureTime) || "—")}</td>
+            <td>${escapeHtml(record.FatigueRating ?? "—")}</td>
+            <td class="note-cell">${noteText}</td>
+            <td>${escapeHtml(formatDateTimeForDisplay(record.CreatedAt))}</td>
+            <td class="actions">
+              <a class="action-link" href="/?edit=${record.Id}">Upravit</a>
+              <form method="post" action="/donations/${record.Id}/delete" onsubmit="return confirm('Opravdu chceš záznam smazat?');">
+                <button type="submit" class="danger">Smazat</button>
+              </form>
+            </td>
+          </tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="9" class="empty-state">Zatím zde nejsou žádné záznamy.</td></tr>`;
+
   return `<!doctype html>
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Darovani krve - evidence</title>
+    <title>Evidenční systém darování krve a plazmy</title>
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=Bricolage+Grotesque:wght@500;700&display=swap");
 
@@ -140,30 +317,28 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
       }
 
       .card {
-        width: min(700px, 100%);
+        width: min(1200px, 100%);
         background: var(--panel);
         border: 1px solid rgba(255, 255, 255, 0.7);
         backdrop-filter: blur(10px);
         border-radius: 24px;
         box-shadow: 0 20px 48px rgba(27, 43, 68, 0.16);
         padding: clamp(1.2rem, 2.5vw, 2rem);
-        animation: fadeUp 700ms ease-out;
       }
 
       h1 {
         margin: 0;
         font-family: "Bricolage Grotesque", sans-serif;
-        font-size: clamp(1.5rem, 2.6vw, 2.2rem);
-        letter-spacing: 0.02em;
+        font-size: clamp(1.6rem, 3vw, 2.4rem);
       }
 
       .subtitle {
-        margin: 0.5rem 0 1.5rem;
+        margin: 0.55rem 0 1.3rem;
         color: var(--muted);
       }
 
       .status {
-        padding: 0.75rem 0.9rem;
+        padding: 0.8rem 0.95rem;
         border-radius: 12px;
         margin-bottom: 1rem;
         font-size: 0.95rem;
@@ -179,6 +354,24 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
         background: rgba(18, 128, 95, 0.11);
         border: 1px solid rgba(18, 128, 95, 0.25);
         color: var(--good);
+      }
+
+      .layout {
+        display: grid;
+        gap: 1.25rem;
+      }
+
+      .section {
+        padding: 1.1rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.6);
+        border: 1px solid rgba(28, 52, 92, 0.1);
+      }
+
+      .section-title {
+        margin: 0 0 1rem;
+        font-family: "Bricolage Grotesque", sans-serif;
+        font-size: 1.15rem;
       }
 
       form {
@@ -208,6 +401,7 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
 
       input,
       select,
+      textarea,
       button {
         font: inherit;
       }
@@ -263,87 +457,196 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
         color: var(--muted);
       }
 
-      @media (max-width: 700px) {
+      .records-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .records-table th,
+      .records-table td {
+        padding: 0.72rem 0.7rem;
+        border-bottom: 1px solid rgba(28, 52, 92, 0.12);
+        text-align: left;
+        vertical-align: top;
+        font-size: 0.94rem;
+      }
+
+      .records-table th {
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+
+      .note-cell {
+        max-width: 260px;
+        white-space: normal;
+      }
+
+      .actions {
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .action-link,
+      .danger {
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        padding: 0.55rem 0.75rem;
+        border-radius: 999px;
+        text-decoration: none;
+        font-size: 0.9rem;
+        font-weight: 700;
+        border: 0;
+        cursor: pointer;
+      }
+
+      .action-link {
+        color: #0e6fd8;
+        background: rgba(14, 111, 216, 0.1);
+      }
+
+      .danger {
+        color: #ffffff;
+        background: linear-gradient(135deg, #c62828, #ef5350);
+      }
+
+      .empty-state {
+        text-align: center;
+        color: var(--muted);
+        padding: 1.2rem 0.7rem;
+      }
+
+      @media (max-width: 900px) {
         .field-group,
         .field-group.three {
           grid-template-columns: 1fr;
         }
-      }
 
-      @keyframes fadeUp {
-        from {
-          opacity: 0;
-          transform: translateY(18px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
+        .records-table {
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
         }
       }
     </style>
   </head>
   <body>
     <main class="card">
-      <h1>Evidence odberu krve a plazmy</h1>
-      <p class="subtitle">Zadej datum, typ a dopln i casy, unavu a poznamku. Data se ulozi do Azure SQL databaze.</p>
+      <h1>Evidenční systém darování krve a plazmy</h1>
+      <p class="subtitle">${subtitle}</p>
       ${errorMessage ? `<div class="status error">${errorMessage}</div>` : ""}
       ${successMessage ? `<div class="status success">${successMessage}</div>` : ""}
-      <form method="post" action="/donations">
-        <div class="field-group">
-          <div class="field">
-            <label for="donationDate">Datum odberu</label>
-            <input id="donationDate" name="donationDate" type="date" required />
-          </div>
-          <div class="field">
-            <label for="donationType">Typ odberu</label>
-            <select id="donationType" name="donationType" required>
-              <option value="">Vyber typ odberu</option>
-              <option value="krev">krev</option>
-              <option value="plazma">plazma</option>
-            </select>
-          </div>
-        </div>
 
-        <div class="field-group">
-          <div class="field">
-            <label for="arrivalTime">Cas prichodu</label>
-            <input id="arrivalTime" name="arrivalTime" type="time" />
-          </div>
-          <div class="field">
-            <label for="departureTime">Cas odchodu</label>
-            <input id="departureTime" name="departureTime" type="time" />
-          </div>
-        </div>
+      <div class="layout">
+        <section class="section">
+          <h2 class="section-title">${formTitle}</h2>
+          <form method="post" action="${isEditMode ? `/donations/${formValues.id}/update` : "/donations"}">
+            <div class="field-group">
+              <div class="field">
+                <label for="donationDate">Datum odběru</label>
+                <input id="donationDate" name="donationDate" type="date" value="${donationDateValue}" required />
+              </div>
+              <div class="field">
+                <label for="donationType">Typ odběru</label>
+                <select id="donationType" name="donationType" required>
+                  ${typeOptions}
+                </select>
+              </div>
+            </div>
 
-        <div class="field-group three">
-          <div class="field">
-            <label for="fatigueRating">Unava po odberu</label>
-            <select id="fatigueRating" name="fatigueRating">
-              <option value="">Vyber hodnoceni</option>
-              <option value="1">1 - velmi unaveny</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
-              <option value="5">5 - citil jsem se nejlepe</option>
-            </select>
-            <span class="small">5 znamena, ze ses citil nejlepe.</span>
-          </div>
-          <div class="field" style="grid-column: span 2;">
-            <label for="note">Poznamka</label>
-            <textarea id="note" name="note" placeholder="Napriklad jak ses citil, co probihalo, zkusenost..." maxlength="1000"></textarea>
-          </div>
-        </div>
+            <div class="field-group">
+              <div class="field">
+                <label for="arrivalTime">Čas příchodu</label>
+                <input id="arrivalTime" name="arrivalTime" type="time" value="${arrivalTimeValue}" />
+              </div>
+              <div class="field">
+                <label for="departureTime">Čas odchodu</label>
+                <input id="departureTime" name="departureTime" type="time" value="${departureTimeValue}" />
+              </div>
+            </div>
 
-        <button type="submit">Ulozit zaznam</button>
-      </form>
-      <p class="hint">Tip: pro Azure nastav v Application Settings promenne AZURE_SQL_CONNECTIONSTRING nebo DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE.</p>
+            <div class="field-group three">
+              <div class="field">
+                <label for="fatigueRating">Únava po odběru</label>
+                <select id="fatigueRating" name="fatigueRating">
+                  ${fatigueOptions}
+                </select>
+                <span class="small">5 znamená, že ses cítil nejlépe.</span>
+              </div>
+              <div class="field" style="grid-column: span 2;">
+                <label for="note">Poznámka</label>
+                <textarea id="note" name="note" placeholder="Například jak ses cítil, co probíhalo, zkušenost..." maxlength="1000">${noteValue}</textarea>
+              </div>
+            </div>
+
+            <button type="submit">${submitLabel}</button>
+          </form>
+        </section>
+
+        <section class="section">
+          <h2 class="section-title">Přehled záznamů</h2>
+          <table class="records-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Datum</th>
+                <th>Typ</th>
+                <th>Příchod</th>
+                <th>Odchod</th>
+                <th>Únava</th>
+                <th>Poznámka</th>
+                <th>Vytvořeno</th>
+                <th>Akce</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${recordsMarkup}
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <p class="hint">Tip: pro Azure nastav v Application Settings proměnné AZURE_SQL_CONNECTIONSTRING nebo DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE.</p>
     </main>
   </body>
 </html>`;
 }
 
-app.get("/", (req, res) => {
-  res.status(200).type("html").send(renderPage());
+app.get("/", async (req, res) => {
+  try {
+    const records = await getDonationRecords();
+    const editRecord = req.query.edit && isValidId(req.query.edit)
+      ? await getDonationRecordById(req.query.edit)
+      : null;
+
+    res.status(200).type("html").send(
+      renderPage({
+        records,
+        isEditMode: Boolean(editRecord),
+        formValues: editRecord
+          ? {
+              id: editRecord.Id,
+              donationDate: formatDateForInput(editRecord.DonationDate),
+              donationType: editRecord.DonationType,
+              arrivalTime: formatTimeForInput(editRecord.ArrivalTime),
+              departureTime: formatTimeForInput(editRecord.DepartureTime),
+              fatigueRating: editRecord.FatigueRating ? String(editRecord.FatigueRating) : "",
+              note: editRecord.Note || "",
+            }
+          : {},
+        errorMessage: req.query.edit && !editRecord ? "Požadovaný záznam nebyl nalezen." : "",
+        successMessage: req.query.saved ? "Záznam byl úspěšně uložen." : req.query.deleted ? "Záznam byl úspěšně smazán." : "",
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to render main page:", error);
+    res.status(500).type("html").send(
+      renderPage({ errorMessage: "Nepodařilo se načíst záznamy z databáze." }),
+    );
+  }
 });
 
 app.post("/donations", async (req, res) => {
@@ -355,29 +658,22 @@ app.post("/donations", async (req, res) => {
   const note = req.body.note ? req.body.note.trim() : null;
 
   if (!donationDate || !donationType) {
-    res.status(400).type("html").send(
-      renderPage({ errorMessage: "Vypln datum i typ odberu." }),
-    );
+    res.status(400).type("html").send(renderPage({ errorMessage: "Vyplň datum i typ odběru." }));
     return;
   }
 
   if (!allowedDonationTypes.has(donationType)) {
-    res.status(400).type("html").send(
-      renderPage({ errorMessage: "Typ odberu musi byt krev nebo plazma." }),
-    );
+    res.status(400).type("html").send(renderPage({ errorMessage: "Typ odběru musí být krev nebo plazma." }));
     return;
   }
 
   if (fatigueRating && !allowedFatigueRatings.has(String(fatigueRating))) {
-    res.status(400).type("html").send(
-      renderPage({ errorMessage: "Hodnoceni unavy musi byt cislo od 1 do 5." }),
-    );
+    res.status(400).type("html").send(renderPage({ errorMessage: "Hodnocení únavy musí být číslo od 1 do 5." }));
     return;
   }
 
   try {
     const pool = await getPool();
-
     await pool
       .request()
       .input("DonationDate", sql.Date, donationDate)
@@ -405,15 +701,112 @@ app.post("/donations", async (req, res) => {
         )
       `);
 
-    res.status(201).type("html").send(
-      renderPage({ successMessage: "Zaznam byl uspesne ulozen do databaze." }),
-    );
+    res.redirect(303, "/?saved=1");
   } catch (error) {
     console.error("Failed to save donation record:", error);
     res.status(500).type("html").send(
       renderPage({
-        errorMessage:
-          "Nepodarilo se ulozit data do Azure SQL. Zkontroluj DB konfiguraci v Application Settings.",
+        errorMessage: "Nepodařilo se uložit data do Azure SQL. Zkontroluj konfiguraci databáze v Application Settings.",
+      }),
+    );
+  }
+});
+
+app.post("/donations/:id/update", async (req, res) => {
+  const recordId = req.params.id;
+
+  if (!isValidId(recordId)) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Neplatné ID záznamu." }));
+    return;
+  }
+
+  const donationDate = req.body.donationDate;
+  const donationType = req.body.donationType;
+  const arrivalTime = req.body.arrivalTime || null;
+  const departureTime = req.body.departureTime || null;
+  const fatigueRating = req.body.fatigueRating || null;
+  const note = req.body.note ? req.body.note.trim() : null;
+
+  if (!donationDate || !donationType) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Vyplň datum i typ odběru." }));
+    return;
+  }
+
+  if (!allowedDonationTypes.has(donationType)) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Typ odběru musí být krev nebo plazma." }));
+    return;
+  }
+
+  if (fatigueRating && !allowedFatigueRatings.has(String(fatigueRating))) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Hodnocení únavy musí být číslo od 1 do 5." }));
+    return;
+  }
+
+  try {
+    const pool = await getPool();
+    const updateResult = await pool
+      .request()
+      .input("Id", sql.Int, Number(recordId))
+      .input("DonationDate", sql.Date, donationDate)
+      .input("DonationType", sql.NVarChar(20), donationType)
+      .input("ArrivalTime", sql.Time(0), arrivalTime)
+      .input("DepartureTime", sql.Time(0), departureTime)
+      .input("FatigueRating", sql.TinyInt, fatigueRating ? Number(fatigueRating) : null)
+      .input("Note", sql.NVarChar(1000), note)
+      .query(`
+        UPDATE dbo.DonationRecords
+        SET
+          DonationDate = @DonationDate,
+          DonationType = @DonationType,
+          ArrivalTime = @ArrivalTime,
+          DepartureTime = @DepartureTime,
+          FatigueRating = @FatigueRating,
+          Note = @Note
+        WHERE Id = @Id
+      `);
+
+    if (updateResult.rowsAffected[0] === 0) {
+      res.status(404).type("html").send(renderPage({ errorMessage: "Záznam nebyl nalezen." }));
+      return;
+    }
+
+    res.redirect(303, "/?saved=1");
+  } catch (error) {
+    console.error("Failed to update donation record:", error);
+    res.status(500).type("html").send(
+      renderPage({
+        errorMessage: "Nepodařilo se upravit záznam v Azure SQL. Zkontroluj konfiguraci databáze v Application Settings.",
+      }),
+    );
+  }
+});
+
+app.post("/donations/:id/delete", async (req, res) => {
+  const recordId = req.params.id;
+
+  if (!isValidId(recordId)) {
+    res.status(400).type("html").send(renderPage({ errorMessage: "Neplatné ID záznamu." }));
+    return;
+  }
+
+  try {
+    const pool = await getPool();
+    const deleteResult = await pool
+      .request()
+      .input("Id", sql.Int, Number(recordId))
+      .query(`DELETE FROM dbo.DonationRecords WHERE Id = @Id`);
+
+    if (deleteResult.rowsAffected[0] === 0) {
+      res.status(404).type("html").send(renderPage({ errorMessage: "Záznam nebyl nalezen." }));
+      return;
+    }
+
+    res.redirect(303, "/?deleted=1");
+  } catch (error) {
+    console.error("Failed to delete donation record:", error);
+    res.status(500).type("html").send(
+      renderPage({
+        errorMessage: "Nepodařilo se smazat záznam v Azure SQL. Zkontroluj konfiguraci databáze v Application Settings.",
       }),
     );
   }
