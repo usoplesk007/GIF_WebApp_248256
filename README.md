@@ -1,32 +1,42 @@
 # GIF_WebApp_248256
 
-Simple Express web application designed for Azure App Service.
+Jednoducha Node.js aplikace postavena na Expressu, vhodna pro nasazeni na Azure App Service.
 
-## Requirements
+## Pozadavky
 
-- Node.js 16 or later
+- Node.js 18+
 - npm
 
-## Setup
+## Instalace
 
-1. Open a terminal in the project folder.
-2. Install dependencies:
+V koreni projektu spust:
 
 ```bash
 npm install
 ```
 
-## Run the app
-
-Start the server:
+## Spusteni aplikace
 
 ```bash
 npm start
 ```
 
-The app listens on port `3000` by default, or the port provided by `process.env.PORT`.
+Aplikace bezi standardne na portu `3000`.
+Port muzes zmenit pomoci promenne prostredi `PORT`:
 
-## Endpoints
+```bash
+PORT=8080 npm start
+```
 
-- `GET /` — returns a welcome message.
-- `GET /health` — returns a JSON health check: `{ "status": "ok" }`.
+## Endpointy
+
+- `GET /` vraci text `Hello from Azure App Service!`
+- `GET /health` vraci JSON se stavem aplikace
+
+Priklad odpovedi z health checku:
+
+```json
+{
+  "status": "ok"
+}
+```

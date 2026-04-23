@@ -1,12 +1,25 @@
 {
   "name": "gif_webapp_248256",
   "version": "1.0.0",
-  "description": "Simple Express app for Azure App Service.",
+  "description": "Jednoducha Node.js aplikace postavena na Expressu, vhodna pro nasazeni na Azure App Service.",
   "main": "index.js",
   "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usoplesk007/GIF_WebApp_248256.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/usoplesk007/GIF_WebApp_248256/issues"
+  },
+  "homepage": "https://github.com/usoplesk007/GIF_WebApp_248256#readme",
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^5.2.1"
   }
 }
