@@ -8,6 +8,7 @@ const port = process.env.PORT || 3000;
 app.use(express.urlencoded({ extended: false }));
 
 const allowedDonationTypes = new Set(["krev", "plazma"]);
+const allowedFatigueRatings = new Set(["1", "2", "3", "4", "5"]);
 
 let poolPromise;
 
@@ -60,17 +61,31 @@ async function getPool() {
         await pool
           .request()
           .query(`
-            IF NOT EXISTS (
-              SELECT 1 FROM sys.tables WHERE name = 'DonationRecords' AND schema_id = SCHEMA_ID('dbo')
-            )
+            IF OBJECT_ID('dbo.DonationRecords', 'U') IS NULL
             BEGIN
               CREATE TABLE dbo.DonationRecords (
                 Id INT IDENTITY(1,1) PRIMARY KEY,
                 DonationDate DATE NOT NULL,
                 DonationType NVARCHAR(20) NOT NULL,
+                ArrivalTime TIME(0) NULL,
+                DepartureTime TIME(0) NULL,
+                FatigueRating TINYINT NULL,
+                Note NVARCHAR(1000) NULL,
                 CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
               );
             END
+
+            IF COL_LENGTH('dbo.DonationRecords', 'ArrivalTime') IS NULL
+              ALTER TABLE dbo.DonationRecords ADD ArrivalTime TIME(0) NULL;
+
+            IF COL_LENGTH('dbo.DonationRecords', 'DepartureTime') IS NULL
+              ALTER TABLE dbo.DonationRecords ADD DepartureTime TIME(0) NULL;
+
+            IF COL_LENGTH('dbo.DonationRecords', 'FatigueRating') IS NULL
+              ALTER TABLE dbo.DonationRecords ADD FatigueRating TINYINT NULL;
+
+            IF COL_LENGTH('dbo.DonationRecords', 'Note') IS NULL
+              ALTER TABLE dbo.DonationRecords ADD Note NVARCHAR(1000) NULL;
           `);
 
         return pool;
@@ -176,6 +191,16 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
         gap: 0.45rem;
       }
 
+      .field-group {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .field-group.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
       label {
         font-size: 0.95rem;
         font-weight: 600;
@@ -188,16 +213,24 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
       }
 
       input,
-      select {
+      select,
+      textarea {
         border: 1px solid rgba(28, 52, 92, 0.22);
         border-radius: 12px;
         padding: 0.72rem 0.8rem;
         background: #ffffff;
         color: var(--ink);
+        width: 100%;
+      }
+
+      textarea {
+        min-height: 120px;
+        resize: vertical;
       }
 
       input:focus,
-      select:focus {
+      select:focus,
+      textarea:focus {
         outline: 2px solid rgba(14, 111, 216, 0.22);
         border-color: var(--accent);
       }
@@ -225,6 +258,18 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
         color: var(--muted);
       }
 
+      .small {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      @media (max-width: 700px) {
+        .field-group,
+        .field-group.three {
+          grid-template-columns: 1fr;
+        }
+      }
+
       @keyframes fadeUp {
         from {
           opacity: 0;
@@ -240,22 +285,55 @@ function renderPage({ errorMessage = "", successMessage = "" } = {}) {
   <body>
     <main class="card">
       <h1>Evidence odberu krve a plazmy</h1>
-      <p class="subtitle">Zadej datum odberu a typ odberu. Data se ulozi do Azure SQL databaze.</p>
+      <p class="subtitle">Zadej datum, typ a dopln i casy, unavu a poznamku. Data se ulozi do Azure SQL databaze.</p>
       ${errorMessage ? `<div class="status error">${errorMessage}</div>` : ""}
       ${successMessage ? `<div class="status success">${successMessage}</div>` : ""}
       <form method="post" action="/donations">
-        <div class="field">
-          <label for="donationDate">Datum odberu</label>
-          <input id="donationDate" name="donationDate" type="date" required />
+        <div class="field-group">
+          <div class="field">
+            <label for="donationDate">Datum odberu</label>
+            <input id="donationDate" name="donationDate" type="date" required />
+          </div>
+          <div class="field">
+            <label for="donationType">Typ odberu</label>
+            <select id="donationType" name="donationType" required>
+              <option value="">Vyber typ odberu</option>
+              <option value="krev">krev</option>
+              <option value="plazma">plazma</option>
+            </select>
+          </div>
         </div>
-        <div class="field">
-          <label for="donationType">Typ odberu</label>
-          <select id="donationType" name="donationType" required>
-            <option value="">Vyber typ odberu</option>
-            <option value="krev">krev</option>
-            <option value="plazma">plazma</option>
-          </select>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="arrivalTime">Cas prichodu</label>
+            <input id="arrivalTime" name="arrivalTime" type="time" />
+          </div>
+          <div class="field">
+            <label for="departureTime">Cas odchodu</label>
+            <input id="departureTime" name="departureTime" type="time" />
+          </div>
         </div>
+
+        <div class="field-group three">
+          <div class="field">
+            <label for="fatigueRating">Unava po odberu</label>
+            <select id="fatigueRating" name="fatigueRating">
+              <option value="">Vyber hodnoceni</option>
+              <option value="1">1 - velmi unaveny</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5 - citil jsem se nejlepe</option>
+            </select>
+            <span class="small">5 znamena, ze ses citil nejlepe.</span>
+          </div>
+          <div class="field" style="grid-column: span 2;">
+            <label for="note">Poznamka</label>
+            <textarea id="note" name="note" placeholder="Napriklad jak ses citil, co probihalo, zkusenost..." maxlength="1000"></textarea>
+          </div>
+        </div>
+
         <button type="submit">Ulozit zaznam</button>
       </form>
       <p class="hint">Tip: pro Azure nastav v Application Settings promenne AZURE_SQL_CONNECTIONSTRING nebo DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE.</p>
@@ -271,6 +349,10 @@ app.get("/", (req, res) => {
 app.post("/donations", async (req, res) => {
   const donationDate = req.body.donationDate;
   const donationType = req.body.donationType;
+  const arrivalTime = req.body.arrivalTime || null;
+  const departureTime = req.body.departureTime || null;
+  const fatigueRating = req.body.fatigueRating || null;
+  const note = req.body.note ? req.body.note.trim() : null;
 
   if (!donationDate || !donationType) {
     res.status(400).type("html").send(
@@ -286,6 +368,13 @@ app.post("/donations", async (req, res) => {
     return;
   }
 
+  if (fatigueRating && !allowedFatigueRatings.has(String(fatigueRating))) {
+    res.status(400).type("html").send(
+      renderPage({ errorMessage: "Hodnoceni unavy musi byt cislo od 1 do 5." }),
+    );
+    return;
+  }
+
   try {
     const pool = await getPool();
 
@@ -293,9 +382,27 @@ app.post("/donations", async (req, res) => {
       .request()
       .input("DonationDate", sql.Date, donationDate)
       .input("DonationType", sql.NVarChar(20), donationType)
+      .input("ArrivalTime", sql.Time(0), arrivalTime)
+      .input("DepartureTime", sql.Time(0), departureTime)
+      .input("FatigueRating", sql.TinyInt, fatigueRating ? Number(fatigueRating) : null)
+      .input("Note", sql.NVarChar(1000), note)
       .query(`
-        INSERT INTO dbo.DonationRecords (DonationDate, DonationType)
-        VALUES (@DonationDate, @DonationType)
+        INSERT INTO dbo.DonationRecords (
+          DonationDate,
+          DonationType,
+          ArrivalTime,
+          DepartureTime,
+          FatigueRating,
+          Note
+        )
+        VALUES (
+          @DonationDate,
+          @DonationType,
+          @ArrivalTime,
+          @DepartureTime,
+          @FatigueRating,
+          @Note
+        )
       `);
 
     res.status(201).type("html").send(
