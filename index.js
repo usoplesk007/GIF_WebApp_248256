@@ -1,27 +1,109 @@
 const express = require("express");
+const sql = require("mssql");
+
 const app = express();
 
 const port = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.status(200).type("html").send(`<!doctype html>
+app.use(express.urlencoded({ extended: false }));
+
+const allowedDonationTypes = new Set(["krev", "plazma"]);
+
+let poolPromise;
+
+function resolveConnectionConfig() {
+  const fromConnectionString =
+    process.env.AZURE_SQL_CONNECTIONSTRING || process.env.SQLCONNSTR_248256;
+
+  if (fromConnectionString) {
+    return fromConnectionString;
+  }
+
+  return {
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    server: process.env.DB_SERVER || "248256.database.windows.net",
+    database: process.env.DB_DATABASE || "248256",
+    port: Number(process.env.DB_PORT || 1433),
+    options: {
+      encrypt: true,
+      trustServerCertificate: false,
+    },
+    pool: {
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30000,
+    },
+  };
+}
+
+function ensureDbCredentials(config) {
+  if (typeof config === "string") {
+    return;
+  }
+
+  if (!config.user || !config.password || !config.server || !config.database) {
+    throw new Error(
+      "Missing Azure SQL configuration. Set AZURE_SQL_CONNECTIONSTRING or DB_USER/DB_PASSWORD/DB_SERVER/DB_DATABASE.",
+    );
+  }
+}
+
+async function getPool() {
+  if (!poolPromise) {
+    const config = resolveConnectionConfig();
+    ensureDbCredentials(config);
+
+    poolPromise = sql
+      .connect(config)
+      .then(async (pool) => {
+        await pool
+          .request()
+          .query(`
+            IF NOT EXISTS (
+              SELECT 1 FROM sys.tables WHERE name = 'DonationRecords' AND schema_id = SCHEMA_ID('dbo')
+            )
+            BEGIN
+              CREATE TABLE dbo.DonationRecords (
+                Id INT IDENTITY(1,1) PRIMARY KEY,
+                DonationDate DATE NOT NULL,
+                DonationType NVARCHAR(20) NOT NULL,
+                CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+              );
+            END
+          `);
+
+        return pool;
+      })
+      .catch((error) => {
+        poolPromise = undefined;
+        throw error;
+      });
+  }
+
+  return poolPromise;
+}
+
+function renderPage({ errorMessage = "", successMessage = "" } = {}) {
+  return `<!doctype html>
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Live Clock App</title>
+    <title>Darovani krve - evidence</title>
     <style>
-      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=DM+Serif+Display&display=swap");
+      @import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=Bricolage+Grotesque:wght@500;700&display=swap");
 
       :root {
-        --bg-start: #fff5e8;
-        --bg-mid: #ffe2bf;
-        --bg-end: #ffd3d0;
-        --panel: rgba(255, 255, 255, 0.75);
-        --text: #20222f;
-        --muted: #556070;
-        --accent: #e75d3c;
-        --accent-soft: #ffb86e;
+        --bg-a: #f6fbff;
+        --bg-b: #d8ecff;
+        --bg-c: #fff2e7;
+        --panel: rgba(255, 255, 255, 0.88);
+        --ink: #1f2b3a;
+        --muted: #59677a;
+        --good: #12805f;
+        --bad: #b3261e;
+        --accent: #0e6fd8;
       }
 
       * {
@@ -31,184 +113,203 @@ app.get("/", (req, res) => {
       body {
         margin: 0;
         min-height: 100vh;
+        font-family: "Sora", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 16%, #ffffff 0%, transparent 35%),
+          radial-gradient(circle at 88% 0%, #ffd7b8 0%, transparent 28%),
+          linear-gradient(155deg, var(--bg-a) 0%, var(--bg-b) 48%, var(--bg-c) 100%);
         display: grid;
         place-items: center;
-        background: radial-gradient(circle at 15% 20%, var(--bg-start), transparent 40%),
-          radial-gradient(circle at 85% 10%, #ffd6a6, transparent 35%),
-          linear-gradient(145deg, var(--bg-mid), var(--bg-end));
-        color: var(--text);
-        font-family: "Space Grotesk", "Segoe UI", sans-serif;
-        overflow: hidden;
+        padding: 2rem 1rem;
       }
 
-      .blob {
-        position: fixed;
-        border-radius: 999px;
-        filter: blur(24px);
-        opacity: 0.45;
-        animation: drift 14s ease-in-out infinite;
-      }
-
-      .blob.one {
-        width: 340px;
-        height: 340px;
-        background: #ffc07a;
-        top: -80px;
-        left: -60px;
-      }
-
-      .blob.two {
-        width: 420px;
-        height: 420px;
-        background: #ff9f9b;
-        bottom: -130px;
-        right: -80px;
-        animation-delay: -4s;
-      }
-
-      .panel {
-        width: min(92vw, 760px);
+      .card {
+        width: min(700px, 100%);
         background: var(--panel);
-        border: 1px solid rgba(255, 255, 255, 0.6);
-        border-radius: 28px;
-        box-shadow: 0 24px 60px rgba(120, 67, 34, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.7);
         backdrop-filter: blur(10px);
-        padding: 2rem;
-        text-align: center;
-        animation: rise 700ms ease-out;
+        border-radius: 24px;
+        box-shadow: 0 20px 48px rgba(27, 43, 68, 0.16);
+        padding: clamp(1.2rem, 2.5vw, 2rem);
+        animation: fadeUp 700ms ease-out;
       }
 
       h1 {
-        margin: 0 0 0.6rem;
-        font: 500 clamp(1.7rem, 3vw, 2.5rem) "DM Serif Display", serif;
-        letter-spacing: 0.03em;
-      }
-
-      p {
         margin: 0;
+        font-family: "Bricolage Grotesque", sans-serif;
+        font-size: clamp(1.5rem, 2.6vw, 2.2rem);
+        letter-spacing: 0.02em;
+      }
+
+      .subtitle {
+        margin: 0.5rem 0 1.5rem;
         color: var(--muted);
-        font-size: clamp(0.95rem, 1.6vw, 1.1rem);
       }
 
-      .clock-wrap {
-        margin-top: 1.6rem;
+      .status {
+        padding: 0.75rem 0.9rem;
+        border-radius: 12px;
+        margin-bottom: 1rem;
+        font-size: 0.95rem;
+      }
+
+      .status.error {
+        background: rgba(179, 38, 30, 0.1);
+        border: 1px solid rgba(179, 38, 30, 0.2);
+        color: var(--bad);
+      }
+
+      .status.success {
+        background: rgba(18, 128, 95, 0.11);
+        border: 1px solid rgba(18, 128, 95, 0.25);
+        color: var(--good);
+      }
+
+      form {
         display: grid;
-        gap: 0.8rem;
-        justify-items: center;
+        gap: 1rem;
       }
 
-      .clock {
-        font-size: clamp(2.4rem, 10vw, 5.8rem);
-        font-weight: 700;
-        letter-spacing: 0.06em;
-        color: var(--accent);
-        font-variant-numeric: tabular-nums;
-        line-height: 1;
+      .field {
+        display: grid;
+        gap: 0.45rem;
       }
 
-      .date {
-        padding: 0.5rem 0.9rem;
+      label {
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      input,
+      select,
+      button {
+        font: inherit;
+      }
+
+      input,
+      select {
+        border: 1px solid rgba(28, 52, 92, 0.22);
+        border-radius: 12px;
+        padding: 0.72rem 0.8rem;
+        background: #ffffff;
+        color: var(--ink);
+      }
+
+      input:focus,
+      select:focus {
+        outline: 2px solid rgba(14, 111, 216, 0.22);
+        border-color: var(--accent);
+      }
+
+      button {
+        border: 0;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.8);
-        border: 1px solid rgba(231, 93, 60, 0.2);
-        color: #2d3340;
-        font-size: clamp(0.9rem, 1.6vw, 1rem);
+        padding: 0.82rem 1.2rem;
+        font-weight: 700;
+        color: #ffffff;
+        background: linear-gradient(135deg, #0e6fd8, #1ea6ff);
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 120ms ease;
+        box-shadow: 0 10px 20px rgba(14, 111, 216, 0.24);
       }
 
-      .dot {
-        display: inline-block;
-        width: 0.6rem;
-        height: 0.6rem;
-        border-radius: 50%;
-        margin-right: 0.35rem;
-        background: linear-gradient(180deg, var(--accent-soft), var(--accent));
-        box-shadow: 0 0 0 0 rgba(231, 93, 60, 0.45);
-        animation: pulse 1.4s infinite;
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 14px 24px rgba(14, 111, 216, 0.26);
       }
 
-      @keyframes rise {
+      .hint {
+        margin-top: 1.2rem;
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      @keyframes fadeUp {
         from {
           opacity: 0;
-          transform: translateY(20px) scale(0.98);
+          transform: translateY(18px);
         }
         to {
           opacity: 1;
-          transform: translateY(0) scale(1);
-        }
-      }
-
-      @keyframes drift {
-        0%,
-        100% {
-          transform: translateY(0) translateX(0);
-        }
-        50% {
-          transform: translateY(14px) translateX(10px);
-        }
-      }
-
-      @keyframes pulse {
-        0% {
-          box-shadow: 0 0 0 0 rgba(231, 93, 60, 0.45);
-        }
-        80% {
-          box-shadow: 0 0 0 10px rgba(231, 93, 60, 0);
-        }
-        100% {
-          box-shadow: 0 0 0 0 rgba(231, 93, 60, 0);
-        }
-      }
-
-      @media (max-width: 540px) {
-        .panel {
-          padding: 1.4rem;
-          border-radius: 20px;
+          transform: translateY(0);
         }
       }
     </style>
   </head>
   <body>
-    <div class="blob one"></div>
-    <div class="blob two"></div>
-
-    <main class="panel" aria-live="polite">
-      <h1>Live Server Clock</h1>
-      <p><span class="dot"></span>time updates every second</p>
-      <section class="clock-wrap">
-        <div id="clock" class="clock">--:--:--</div>
-        <div id="date" class="date">Loading date...</div>
-      </section>
+    <main class="card">
+      <h1>Evidence odberu krve a plazmy</h1>
+      <p class="subtitle">Zadej datum odberu a typ odberu. Data se ulozi do Azure SQL databaze.</p>
+      ${errorMessage ? `<div class="status error">${errorMessage}</div>` : ""}
+      ${successMessage ? `<div class="status success">${successMessage}</div>` : ""}
+      <form method="post" action="/donations">
+        <div class="field">
+          <label for="donationDate">Datum odberu</label>
+          <input id="donationDate" name="donationDate" type="date" required />
+        </div>
+        <div class="field">
+          <label for="donationType">Typ odberu</label>
+          <select id="donationType" name="donationType" required>
+            <option value="">Vyber typ odberu</option>
+            <option value="krev">krev</option>
+            <option value="plazma">plazma</option>
+          </select>
+        </div>
+        <button type="submit">Ulozit zaznam</button>
+      </form>
+      <p class="hint">Tip: pro Azure nastav v Application Settings promenne AZURE_SQL_CONNECTIONSTRING nebo DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE.</p>
     </main>
-
-    <script>
-      const clockElement = document.getElementById("clock");
-      const dateElement = document.getElementById("date");
-
-      const timeFormatter = new Intl.DateTimeFormat("cs-CZ", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      });
-
-      const dateFormatter = new Intl.DateTimeFormat("cs-CZ", {
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-      });
-
-      function updateClock() {
-        const now = new Date();
-        clockElement.textContent = timeFormatter.format(now);
-        dateElement.textContent = dateFormatter.format(now);
-      }
-
-      updateClock();
-      setInterval(updateClock, 1000);
-    </script>
   </body>
-</html>`);
+</html>`;
+}
+
+app.get("/", (req, res) => {
+  res.status(200).type("html").send(renderPage());
+});
+
+app.post("/donations", async (req, res) => {
+  const donationDate = req.body.donationDate;
+  const donationType = req.body.donationType;
+
+  if (!donationDate || !donationType) {
+    res.status(400).type("html").send(
+      renderPage({ errorMessage: "Vypln datum i typ odberu." }),
+    );
+    return;
+  }
+
+  if (!allowedDonationTypes.has(donationType)) {
+    res.status(400).type("html").send(
+      renderPage({ errorMessage: "Typ odberu musi byt krev nebo plazma." }),
+    );
+    return;
+  }
+
+  try {
+    const pool = await getPool();
+
+    await pool
+      .request()
+      .input("DonationDate", sql.Date, donationDate)
+      .input("DonationType", sql.NVarChar(20), donationType)
+      .query(`
+        INSERT INTO dbo.DonationRecords (DonationDate, DonationType)
+        VALUES (@DonationDate, @DonationType)
+      `);
+
+    res.status(201).type("html").send(
+      renderPage({ successMessage: "Zaznam byl uspesne ulozen do databaze." }),
+    );
+  } catch (error) {
+    console.error("Failed to save donation record:", error);
+    res.status(500).type("html").send(
+      renderPage({
+        errorMessage:
+          "Nepodarilo se ulozit data do Azure SQL. Zkontroluj DB konfiguraci v Application Settings.",
+      }),
+    );
+  }
 });
 
 app.get("/health", (req, res) => {

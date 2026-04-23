@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/usoplesk007/GIF_WebApp_248256#readme",
   "dependencies": {
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "mssql": "^12.5.0"
   }
 }
